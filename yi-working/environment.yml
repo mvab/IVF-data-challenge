@@ -1,0 +1,29 @@
+name: hfea-ivf
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.7
+  - pandas
+  - numpy
+  - openblas
+  - nodejs
+  - jupyterlab
+  - r-devtools
+  - r-tidyverse
+  - r-tidymodels
+  - r-data.table
+  - r-irkernel
+  - r-ggally
+  - r-skimr
+  # explanatory ml
+  - r-vip
+  - r-lime
+  # boost_tree
+  - r-xgboost
+  # random forest
+  - r-ranger
+  # decision tree
+  - r-c50
+  # multi processing
+  - r-furrr
