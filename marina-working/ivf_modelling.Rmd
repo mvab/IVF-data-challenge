@@ -1,0 +1,344 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning =  FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(comment = "")
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(vroom)
+library(forcats)
+```
+
+
+```{r}
+#rdsf
+data_path<-"/projects/MRC-IEU/research/projects/ieu2/p4/052/working/data/hfea-ivf/data/"
+# local 
+data_path<-"~/Documents/Projects/IVF/data/"
+```
+
+```{r}
+raw_data <-vroom(paste0(data_path, "hfea-ivf.csv"))
+full_data <-raw_data %>% 
+            # tidy age groups
+            mutate(patient_age = gsub(" ", "", `Patient Age at Treatment`) ) %>% 
+            # update year cols
+            mutate(cohort=`source` %>% 
+                  stringr::str_match("data/raw_data/ar-(.+?)-xlsb") %>% `[`(,2))
+
+# update dat with clean categories
+full_data <-full_data %>% 
+  separate(`Main Reason for Producing Embroys Storing Eggs`, 
+           into=c("main_reason"),sep=",", remove = F) %>%
+  mutate(main_reason=str_trim(main_reason, side="right") )%>%  
+  mutate(main_reason=ifelse(is.na(main_reason), "Reason unassigned", main_reason))
+
+# we are only going to look at people who joined specifically for treatment, with known age, iafter 2000
+dat1<-full_data %>% 
+      filter(main_reason != 'For Research') %>%  # possibly include other categories later too
+      filter(`Patient Age at Treatment` != '999') %>% 
+      filter(!cohort %in% c('1991-1994', '1995-1999' ))
+
+```
+
+```{r}
+full_data %>% filter(main_reason == "Reason unassigned") %>% count(`Type of treatment - IVF or DI` )
+
+full_data %>% filter(main_reason != "Reason unassigned") %>% count(`Type of treatment - IVF or DI` )
+```
+
+
+```{r}
+# tidy up ovulation induction methods
+dat<-dat1 %>%
+  rename(ovulation_induction=`Type of Ovulation Induction`) %>% 
+  mutate(ovulation_induction= str_replace_all(ovulation_induction, " ,", ":"))  %>% 
+  mutate(ovulation_induction= str_replace_all(ovulation_induction, "-", ""))  %>% 
+  mutate(ovulation_induction= ifelse(ovulation_induction =="Yes but not recorded", "Unknown method",
+                              ifelse(ovulation_induction == "Not stated but extrapolated",  "Unknown method",
+                              ifelse(ovulation_induction=="Natural", "None", ovulation_induction)))) %>% 
+  mutate(ovulation_induction = fct_lump_min(ovulation_induction %>% as.factor, min=50)) %>% 
+  mutate_if(is.factor, as.character)
+  
+
+
+dim(dat[is.na(dat$ovulation_induction),])
+dat[is.na(dat$ovulation_induction),]$ovulation_induction <- "No record"
+dat %>% count(ovulation_induction) %>% View()
+```
+
+
+
+
+```{r}
+# tidy up treatment subclasses
+dat<-  dat %>%    
+  rename(specific_treatment=`Specific treatment type`) %>% 
+  mutate(specific_treatment = str_replace_all(specific_treatment, " / ", ":"),
+         specific_treatment = str_replace(specific_treatment, "\\+", ":"),
+         specific_treatment = str_replace_all(specific_treatment, ":Unknown", ""),
+         specific_treatment = str_replace_all(specific_treatment, " ", ""),
+         specific_treatment = ifelse(is.na(specific_treatment), "Unknown", specific_treatment)) %>% 
+  separate(specific_treatment, into=c("specific_treatment"), sep=":", remove=F) %>% 
+  mutate(specific_treatment = fct_lump_min(specific_treatment %>% as.factor, min=300)) %>% 
+  #count(main_treatment) %>% View()
+  filter(specific_treatment %in% c("IVF", "ICSI", "IUI", "ICI"))
+
+dim(dat)
+```
+
+
+```{r}
+
+dat_sub<-dat %>% 
+    select(
+        patient_age=`Patient Age at Treatment`,
+        #duration_infertility=`Date patient started trying to become pregnant OR date of last pregnancy`, # 96% missing
+        #main_reason, # linaerly correlated with outcome
+        cycles_IVF=`Total Number of Previous IVF cycles`,                                    
+        cycles_DI=`Total Number of Previous DI cycles`,                                     
+        pregnancy_IVF=`Total number of IVF pregnancies`,                                      
+        pregnancy_DI=`Total number of DI pregnancies`,                                        
+        birth_IVF=`Total number of live births - conceived through IVF`,                   
+        birth_DI= `Total number of live births - conceived through DI`,
+        infertility_FP =`Type of Infertility - Female Primary`,
+        infertility_FS =`Type of Infertility - Female Secondary`,
+        infertility_MP =`Type of Infertility - Male Primary`,
+        infertility_MS =`Type of Infertility - Male Secondary`,
+        infertility_CP =`Type of Infertility -Couple Primary`,
+        infertility_CS =`Type of Infertility -Couple Secondary`,
+        cause_tubaldisease = `Cause  of Infertility - Tubal disease`,                    
+        cause_ovulatory = `Cause of Infertility - Ovulatory Disorder`   ,              
+        cause_malefactor = `Cause of Infertility - Male Factor` ,                        
+        cause_patient = `Cause of Infertility - Patient Unexplained`,               
+        cause_endometrosis = `Cause of Infertility - Endometriosis` ,                      
+        cause_cervical = `Cause of Infertility - Cervical factors`,                   
+        cause_femalefactor = `Cause of Infertility - Female Factors` ,                    
+        cause_sperm_conc = `Cause of Infertility - Partner Sperm Concentration`,        
+        cause_sperm_morph = `Cause of Infertility -  Partner Sperm Morphology` ,          
+        cause_sperm_motility = `Causes of Infertility - Partner Sperm Motility` ,            
+        cause_sperm_immuno = `Cause of Infertility -  Partner Sperm Immunological factors`,
+        #egg_source=`Egg Source`,
+        #sperm_source=`Sperm From`,
+        #ovulation_induction,
+        main_treatment=`Type of treatment - IVF or DI`) %>% 
+ # mutate(egg_source=ifelse(is.na(egg_source), "unknown",egg_source)) %>% 
+  mutate(cycles_IVF = ifelse(cycles_IVF == ">=5", 10 ,cycles_IVF)) %>%  # arbitrarily going to give this a large value
+  mutate(cycles_DI = ifelse(cycles_DI == ">=5", 10 ,cycles_DI)) 
+
+dat_sub<-dat_sub %>% 
+          mutate_if(is.character, as.factor) %>% 
+          mutate_if(is.numeric, as.factor) %>% 
+          mutate_at(vars(cycles_IVF,
+                      cycles_DI,
+                      pregnancy_IVF,
+                      pregnancy_DI,
+                      birth_IVF,
+                      birth_DI), as.numeric) %>% 
+          filter_all(all_vars(!is.na(.)))
+```
+
+
+ Predict treatment IVF vs DI
+```{r}
+# split into train/test
+data_split <- initial_split(dat_sub, prop = 0.6)
+
+# preprocess
+my_recipe <- training(data_split) %>%
+              recipe(main_treatment ~.) %>%
+              step_dummy(all_predictors()) %>% 
+              step_corr(all_predictors()) %>%
+              prep()
+# apply recipe to train and test
+my_testing <- my_recipe %>%
+               bake(testing(data_split)) 
+my_training <- juice(my_recipe)
+```
+
+
+```{r}
+# model 1
+rf <-  rand_forest(trees = 100, mode = "classification") %>%
+  set_engine("randomForest") %>%
+  fit(main_treatment ~ ., data = my_training)
+
+out1<-rf %>%
+  predict(my_testing) %>%
+  bind_cols(my_testing)
+
+out1 %>% 
+metrics(truth=main_treatment, estimate=.pred_class)
+```
+
+# based on age + infertility
+.metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.919
+2 kap      binary         0.276
+
+#Based on infertility + numbers
+  .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.962
+2 kap      binary         0.762
+
+#Based on infertility + numbers + ovulation induction
+  .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.980
+2 kap      binary         0.881
+
+```{r}
+# model 2
+lg <-  logistic_reg(penalty=0) %>%
+  set_engine("glmnet") %>%
+  fit(main_treatment ~ ., data = my_training)
+
+out2<-lg %>%
+  predict(my_testing) %>%
+  bind_cols(my_testing)
+
+out2 %>% 
+metrics(truth=main_treatment, estimate=.pred_class)
+```
+
+# based on age + infertility
+  .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.914
+2 kap      binary         0.226
+
+#Based on infertility + numbers
+
+  .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.943
+2 kap      binary         0.608
+
+```{r}
+# model 3
+xg <-  boost_tree(trees=100,  mode = "classification") %>%
+  set_engine("xgboost") %>%
+  fit(main_treatment ~ ., data = my_training)
+
+out3<-xg %>%
+  predict(my_testing) %>%
+  bind_cols(my_testing)
+
+out3 %>% 
+metrics(truth=main_treatment, estimate=.pred_class)
+```
+
+#Based on infertility + numbers
+
+ .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.962
+2 kap      binary         0.761
+
+
+
+
+
+Sub-categories of treatments
+
+```{r}
+
+dat_sub<-dat %>% 
+    select(
+        patient_age=`Patient Age at Treatment`,
+        cycles_IVF=`Total Number of Previous IVF cycles`,                                    
+        cycles_DI=`Total Number of Previous DI cycles`,                                     
+        pregnancy_IVF=`Total number of IVF pregnancies`,                                      
+        pregnancy_DI=`Total number of DI pregnancies`,                                        
+        birth_IVF=`Total number of live births - conceived through IVF`,                   
+        birth_DI= `Total number of live births - conceived through DI`,
+        infertility_FP =`Type of Infertility - Female Primary`,
+        infertility_FS =`Type of Infertility - Female Secondary`,
+        infertility_MP =`Type of Infertility - Male Primary`,
+        infertility_MS =`Type of Infertility - Male Secondary`,
+        infertility_CP =`Type of Infertility -Couple Primary`,
+        infertility_CS =`Type of Infertility -Couple Secondary`,
+        cause_tubaldisease = `Cause  of Infertility - Tubal disease`,                    
+        cause_ovulatory = `Cause of Infertility - Ovulatory Disorder`   ,              
+        cause_malefactor = `Cause of Infertility - Male Factor` ,                        
+        cause_patient = `Cause of Infertility - Patient Unexplained`,               
+        cause_endometrosis = `Cause of Infertility - Endometriosis` ,                      
+        cause_cervical = `Cause of Infertility - Cervical factors`,                   
+        cause_femalefactor = `Cause of Infertility - Female Factors` ,                    
+        cause_sperm_conc = `Cause of Infertility - Partner Sperm Concentration`,        
+        cause_sperm_morph = `Cause of Infertility -  Partner Sperm Morphology` ,          
+        cause_sperm_motility = `Causes of Infertility - Partner Sperm Motility` ,            
+        cause_sperm_immuno = `Cause of Infertility -  Partner Sperm Immunological factors`,
+        specific_treatment) %>%
+  mutate(specific_treatment=droplevels(specific_treatment)) %>% 
+ # mutate(egg_source=ifelse(is.na(egg_source), "unknown",egg_source)) %>% 
+  mutate(cycles_IVF = ifelse(cycles_IVF == ">=5", 10 ,cycles_IVF)) %>%  # arbitrarily going to give this a large value
+  mutate(cycles_DI = ifelse(cycles_DI == ">=5", 10 ,cycles_DI)) 
+
+dat_sub<-dat_sub %>% 
+          mutate_if(is.character, as.factor) %>% 
+          mutate_if(is.numeric, as.factor) %>% 
+          mutate_at(vars(cycles_IVF,
+                      cycles_DI,
+                      pregnancy_IVF,
+                      pregnancy_DI,
+                      birth_IVF,
+                      birth_DI), as.numeric) %>% 
+          filter_all(all_vars(!is.na(.)))
+```
+
+```{r}
+# split into train/test
+data_split <- initial_split(dat_sub, prop = 0.6)
+
+# preprocess
+my_recipe <- training(data_split) %>%
+              recipe(specific_treatment ~.) %>%
+              step_dummy(all_predictors()) %>% 
+              step_corr(all_predictors()) %>%
+              prep()
+# apply recipe to train and test
+my_testing <- my_recipe %>%
+               bake(testing(data_split)) 
+my_training <- juice(my_recipe)
+```
+
+
+```{r}
+# model 1
+rf_multi <-  rand_forest(trees = 100, mode = "classification") %>%
+  set_engine("randomForest") %>%
+  fit(specific_treatment ~ ., data = my_training)
+
+out1_multi<-rf_multi %>%
+  predict(my_testing) %>%
+  bind_cols(my_testing)
+
+out1_multi %>% 
+metrics(truth=specific_treatment, estimate=.pred_class)
+
+out1_multi %>% select(specific_treatment, .pred_class) %>% View()
+
+
+class_voting<-predict(rf_multi, my_testing, type = "prob") %>%
+  bind_cols(predict(rf_multi, my_testing)) %>%
+  bind_cols(select(my_testing, specific_treatment)) %>%View()
+  metrics(specific_treatment, .pred_ICI:.pred_IVF, estimate = .pred_class)
+View(class_voting)
+```
+ 
+ #Based on infertility + numbers
+  .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy multiclass     0.726
+2 kap      multiclass     0.530

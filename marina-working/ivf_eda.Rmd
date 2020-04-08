@@ -1,0 +1,539 @@
+---
+title: "Exploring IVF data"
+author: "Marina Vabistsevits"
+date: "27/03/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning =  FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(comment = "")
+```
+
+```{r}
+library(tidyverse)
+library(vroom)
+library(cowplot)
+library(wesanderson)
+library(scales)
+library(waffle)
+library(hrbrthemes)
+library(patchwork)
+library(yarrr)
+```
+
+
+```{r}
+#rdsf
+data_path<-"/projects/MRC-IEU/research/projects/ieu2/p4/052/working/data/hfea-ivf/data/"
+# local 
+data_path<-"~/Downloads/"
+```
+
+#### Load data 
+```{r}
+raw_data <-vroom(paste0(data_path, "hfea-ivf.csv"))
+full_data <-raw_data %>% 
+            # tidy age groups
+            mutate(`Patient Age at Treatment`= gsub(" ", "", `Patient Age at Treatment`) ) %>% 
+            # update year cols
+            mutate(years=ifelse(source == "data/raw_data/ar-2010-2014-xlsb", '2010-2014',
+                         ifelse(source == "data/raw_data/ar-1995-1999-xlsb", '1995-1999',
+                         ifelse(source == "data/raw_data/ar-2000-2004-xlsb", '2000-2004',
+                         ifelse(source == "data/raw_data/ar-1991-1994-xlsb", '1991-1994',
+                         ifelse(source == "data/raw_data/ar-2015-2016-xlsb", '2015-2016',
+                         ifelse(source == "data/raw_data/ar-2005-2009-xlsb", '2005-2009', 
+                         NA))))))) 
+                
+dim(full_data)
+full_data %>% count(years) %>% arrange(years)
+```
+
+```{r}
+colnames(full_data)
+```
+
+## Plan
+
+I'm going to explore the following categories:
+
+* reasons for enrolment
+* types of infertility
+* cause of infertility
+* types of IVF treatement
+  - subtypes
+  - how treatment types preference changed over time
+  
+
+
+
+### Exploring reasons for enrolment into IVF Registry
+```{r}
+# check partipation reasons
+full_data %>% 
+  count(`Main Reason for Producing Embroys Storing Eggs`)
+
+# tidy up reason, keeping just the first one
+reasons<-full_data %>% 
+  count(`Main Reason for Producing Embroys Storing Eggs`) %>% 
+  separate(1, into=c("main_reason"),sep=",") %>% 
+  mutate(main_reason=str_trim(main_reason, side="right") )%>%  
+  mutate(main_reason=ifelse(is.na(main_reason), "Reason unassigned", main_reason)) %>% 
+  group_by(main_reason) %>% 
+  summarize(sum=sum(n)) 
+
+reasons<-reasons %>% 
+  mutate(percent=(sum/sum(reasons$sum))*1000) 
+reasons$percent[2]<-1
+print(reasons)
+
+# simple bar chart
+ggplot(reasons,aes(x = main_reason, y = sum)) + 
+  geom_bar(stat="identity")+
+  coord_flip()+
+  theme_minimal_hgrid(10, rel_small = 1)
+
+pal9<-c(wes_palette("Royal1"), wes_palette("Moonrise3"))
+#show_col(pal9)
+ggplot(reasons, aes(fill = main_reason, values = percent))+
+  geom_waffle(n_rows = 25, size = 0.33, colour = "white", flip = TRUE) +
+  coord_equal() +
+  theme_minimal_grid(10, rel_small = 1,line_size=0)+
+  theme_enhance_waffle()+
+  guides(fill = guide_legend(reverse = TRUE))+
+  ggtitle("   Main reason for participation")+
+  scale_fill_manual(
+    name = NULL,
+    values = c(pal9[5],pal9[2],pal9[7],pal9[4],pal9[1],pal9[6]),
+    labels = c('For Donation',  'For Research',  'For Storing Eggs',
+               'For Storing Embryos' ,'Reason unassigned' ,'Treatment Now' )
+  ) 
+```
+
+
+
+```{r}
+# update dat with clean categories
+full_data<-full_data %>% 
+  separate(`Main Reason for Producing Embroys Storing Eggs`, 
+           into=c("main_reason"),sep=",", remove = F) %>%
+  mutate(main_reason=str_trim(main_reason, side="right") )%>%  
+  mutate(main_reason=ifelse(is.na(main_reason), "Reason unassigned", main_reason))
+
+# we are only going to look at people who joined specifically for treatment, with known age
+dat<-full_data %>% 
+      filter(main_reason == 'Treatment Now') %>% 
+      filter(`Patient Age at Treatment` != '999')
+```
+
+
+
+### Exploring types of infertility
+
+Infertility is usually only diagnosed when a couple have not managed to conceive after a year of trying.
+
+There are 2 types of infertility:
+
+* **primary infertility** – where someone who's never conceived a child in the past has difficulty conceiving
+* **secondary infertility **– where someone has had 1 or more pregnancies in the past, but is having difficulty conceiving again
+
+*From: https://www.nhs.uk/conditions/infertility/*
+
+```{r}
+# get columsn for types of infertility
+cols<-colnames(dat)[grepl("Type of Inf", colnames(dat))]
+print(cols)
+subset1<-dat %>% select(`Patient Age at Treatment`, cols) 
+colnames(subset1)<-str_replace(colnames(subset1), "Type of Infertility -", "") %>%
+                  str_trim(., side="both") 
+
+print(subset1[398:406,2:7])
+
+# convert dat to long format 
+subset1_tidy<- subset1 %>% 
+          pivot_longer(2:7, 
+                    names_to = "type_of_infertility",
+                    values_to = "binary") %>% 
+              filter(binary == 1) %>% 
+             # add partner categories
+              mutate(partner=ifelse(grepl("Female", type_of_infertility), "Female",
+                              ifelse(grepl("Male", type_of_infertility), "Male",
+                              ifelse(grepl("Couple", type_of_infertility), "Couple",0))))
+head(subset1_tidy)
+```
+
+```{r}
+pal <- c(wes_palette("Moonrise3") , wes_palette("Royal1"))
+# most basic
+ggplot(subset1_tidy,aes(x = `Patient Age at Treatment`, fill = type_of_infertility)) + 
+  geom_bar()+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  scale_fill_manual(values=pal)+
+  labs(fill = "Types of Infertility", y="")    
+
+# by partner
+ggplot(subset1_tidy,aes(x = `Patient Age at Treatment`, fill = type_of_infertility)) + 
+  geom_bar()+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  facet_wrap(~partner, nrow=1)+
+  scale_fill_manual(values=pal)+
+  labs(fill = "Types of Infertility", y="") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# then I decided to convert each group into percentage
+
+# create counts by group 
+subset1_tidy2<- subset1_tidy %>% 
+                group_by(`Patient Age at Treatment`, type_of_infertility) %>%         
+                mutate(count = n()) %>%
+                distinct() %>% 
+                ungroup()
+head(subset1_tidy2)
+
+# calulate sums per age
+age_counts<-subset1_tidy2 %>%
+  select(`Patient Age at Treatment`, count) %>% 
+  group_by(`Patient Age at Treatment`) %>% 
+  summarize(total = sum(count)) %>%
+  ungroup() %>% 
+  column_to_rownames("Patient Age at Treatment") %>% 
+  t() %>% as.data.frame()
+print(age_counts)  
+
+subset1_tidy2<-subset1_tidy2 %>% 
+    mutate(age_group_percent= ifelse(`Patient Age at Treatment` == "18-34", count/age_counts$`18-34`,
+                              ifelse(`Patient Age at Treatment` == "35-37", count/age_counts$`35-37`,
+                              ifelse(`Patient Age at Treatment` == "38-39", count/age_counts$`38-39`,
+                              ifelse(`Patient Age at Treatment` == "40-42", count/age_counts$`40-42`,
+                              ifelse(`Patient Age at Treatment` == "43-44", count/age_counts$`43-44`,
+                              ifelse(`Patient Age at Treatment` == "45-50", count/age_counts$`45-50`, NA)))))))
+head(subset1_tidy2)
+
+# now can definitely see the conncetion of age + primary/secondary 
+pal <- c(wes_palette("Moonrise3") , wes_palette("Royal1"))
+
+# 100 % by age group 
+ggplot(subset1_tidy2,aes(x = `Patient Age at Treatment`, y=age_group_percent, fill = type_of_infertility)) + 
+  geom_bar(stat = "identity")+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  scale_fill_manual(values=pal)+
+  #facet_wrap(~partner, nrow=1)+
+  labs(fill = "Types of Infertility", y="")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# stratigy by gender
+ggplot(subset1_tidy2,aes(x = `Patient Age at Treatment`, y=age_group_percent, fill = type_of_infertility)) + 
+  geom_bar(stat = "identity")+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  scale_fill_manual(values=pal)+
+  facet_wrap(~partner, nrow=1)+
+  labs(fill = "Types of Infertility", y="")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# anyway now going to focus on male and female infertiliry only  
+
+subset1_grouped <- subset1 %>% 
+                select(1:5) %>% # keep female and male
+                unite("types", 2:5,  sep="/" ) %>%  # group them into one column of binary 0/1
+                group_by(`Patient Age at Treatment`, types) %>%         
+                mutate(count = n()) %>%
+                distinct() %>% ungroup()
+
+colnames(subset1)[2:5]
+head(subset1_grouped)
+
+
+pal_cont <- wes_palette("Moonrise3", 17, type = "continuous")
+#show_col(pal_cont)
+ggplot(subset1_grouped,aes(x = `Patient Age at Treatment`, y= count, fill = types)) + 
+  geom_bar(stat = "identity")+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  facet_wrap(~types, nrow=10)+
+  theme(legend.position = "none")+
+  scale_fill_manual(values=pal_cont)+
+  labs(fill = "Combination of infertily factors", y="")+
+  guides(fill=guide_legend(ncol=1))
+
+# count by type
+subset1_grouped_counts<-subset1_grouped %>% 
+              group_by( types) %>% 
+              summarize(total = sum(count)) %>%
+              ungroup() %>% 
+              arrange(desc(total))
+
+# look at most common types closer  
+types_sub<-subset1_grouped_counts %>% filter(total >40000) %>% pull(types)
+subset1_grouped %>% filter(types %in% types_sub)  %>% 
+  ggplot(aes(x = `Patient Age at Treatment`, y= count, fill = types)) + 
+    geom_bar(stat = "identity")+
+    theme_minimal_hgrid(10, rel_small = 1)+
+    facet_wrap(~types, nrow=5)+
+    scale_fill_manual(values=pal_cont)+
+    theme(legend.position = "none")+
+    labs(fill = "Combination of infertily factors", y="")+
+    guides(fill=guide_legend(ncol=1))
+
+# look at the rest closer
+types_sub<-subset1_grouped_counts %>% filter(total <40000) %>% pull(types)
+subset1_grouped %>% filter(types %in% types_sub)  %>% 
+  ggplot(aes(x = `Patient Age at Treatment`, y= count, fill = types)) + 
+    geom_bar(stat = "identity")+
+    theme_minimal_hgrid(10, rel_small = 1)+
+    facet_wrap(~types, nrow=5)+
+    theme(legend.position = "none")+
+    scale_fill_manual(values=rev(pal_cont))+
+    labs(fill = "Combination of infertily factors", y="")+
+    guides(fill=guide_legend(ncol=1))+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+#subset1_grouped2 <- subset1 %>% select(1:5) %>% 
+#                mutate(female_infertility= ifelse(rowSums(.[2:3]) == 0 , 0 , 1 )) %>% 
+#                mutate(male_infertility= ifelse(rowSums(.[4:5]) == 0 , 0 , 1 )) %>% 
+#                select(1,6,7) %>% 
+#                unite("types", 2:3,  sep="/" ) %>% 
+#                group_by(`Patient Age at Treatment`, types) %>%         
+#                mutate(count = n()) %>%
+#                distinct()
+#                  
+#
+#pal <- c(wes_palette("Moonrise3") , wes_palette("Royal1"))
+#pal <- c(wes_palette("Moonrise3")[1:2], wes_palette("Moonrise3")[1:2], wes_palette("Moonrise3")[1:2])
+#ggplot(subset1_grouped2,aes(x = `Patient Age at Treatment`, y= count, fill = types)) + 
+#  geom_bar(stat = "identity")+
+#  theme_minimal_hgrid(10, rel_small = 1)+
+#  facet_wrap(~types, nrow=10)+
+#  #scale_fill_manual(values=pal)+
+#  labs(fill = "Combination of infertily factors", y="")+
+#  guides(fill=guide_legend(ncol=1))
+```
+
+### Exploring causes of infertility
+
+
+```{r p, fig.height = 5, fig.width = 10}
+# types of infertility
+# get columsn for types of infertility
+cols<-colnames(dat)[grepl("Cause", colnames(dat))]
+print(cols)
+subset2<-dat %>% select(`Patient Age at Treatment`, cols) %>% 
+   rename("Cause of Infertility - Tubal disease"="Cause  of Infertility - Tubal disease",
+         "Cause of Infertility - Partner Sperm Motility" = "Causes of Infertility - Partner Sperm Motility")
+colnames(subset2)<-str_replace(colnames(subset2), "Cause of Infertility - ", "")%>%
+                  str_trim(., side="both") 
+
+print(subset2[398:406,2:7])
+
+
+
+subset2<- subset2 %>% 
+  pivot_longer(2:12, 
+               names_to = "cause_of_infertility",
+               values_to = "binary") %>%
+  filter(binary == 1) %>% 
+  mutate(partner=ifelse(grepl("Female", cause_of_infertility), "Female/Patient",
+                 ifelse(grepl("Patient", cause_of_infertility), "Female/Patient",
+                 ifelse(grepl("Male", cause_of_infertility), "Male/Partner",
+                 ifelse(grepl("Partner", cause_of_infertility),"Male/Partner","Female/Patient"))))) %>% 
+  mutate(cause_of_infertility=str_replace(cause_of_infertility,"Partner ", ""))
+
+pal <- c(wes_palette("Royal1"), wes_palette("Moonrise3"), wes_palette("Chevalier1"))
+p1<-subset2 %>% 
+  filter(partner == "Female/Patient") %>% 
+  ggplot(aes(x = `Patient Age at Treatment`, fill = cause_of_infertility)) + 
+    geom_bar()+
+    theme_minimal_hgrid(10, rel_small = 1)+
+    scale_fill_manual(values=pal)+
+    facet_wrap(~partner, nrow=1)+
+    theme(legend.position = "right")+
+    labs(fill = "Cause of Infertility", y="")+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2<-subset2 %>% 
+  filter(partner == "Male/Partner") %>% 
+  ggplot(aes(x = `Patient Age at Treatment`, fill = cause_of_infertility)) + 
+    geom_bar()+
+    theme_minimal_hgrid(10, rel_small = 1)+
+    scale_fill_manual(values=rev(pal))+
+    facet_wrap(~partner, nrow=1)+
+    theme(legend.position = "right")+
+    labs(fill = "Cause of Infertility", y="")+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p<-(p1 + p2)
+p
+```
+
+
+
+### Exploring types of treatments
+
+
+```{r, echo=F}
+pal17<-c("#d94b34",
+         "#5dcf5c",
+         "#b04bd7",
+         "#a7da42",
+         "#7666cb",
+         "#d0bf4e",
+         "#d04c99",
+         "#7ed5a3",
+         "#ba5a62",
+         "#62883c",
+         "#698fcb",
+         "#b87b39",
+         "#7dc2cd",
+         "#d49fcb",
+         "#607561",
+         "#776685",
+         "#cdb395")
+```
+
+
+```{r}
+subset3 <- full_data %>% 
+  select("Patient Age at Treatment", 
+         "Year of Treatment", "years",
+          "Type of treatment - IVF or DI" , "Specific treatment type", 
+          "Egg Source" , "Sperm From" ,
+          "Donated embryo" , "Patient acting as Surrogate") 
+
+subset3 %>% count(`Type of treatment - IVF or DI`)
+subset3 %>% count(`Specific treatment type`) %>%  arrange(desc(n))
+```
+
+
+* **IVF (In Vitro Fertilisation)** - An egg being fertilised by sperm outside the body.
+
+* **DI (Donor Insemination)** - Using sperm from a sperm donor in order to get pregnant. This can be used in IUI, but also IVF and other fertility treatment options.
+
+* **ICSI (Intracytoplasmic Sperm Injection)** - When a lone, high-quality sperm is injected straight into your egg during IVF, rather than allowing the sperm and egg to find one another in the dish.
+
+
+```{r}
+subset3 %>% pull(`Specific treatment type`) %>% unique()
+
+subset3_tidy <-  subset3 %>% 
+  mutate(`Specific treatment type` = str_replace_all(`Specific treatment type`, " / ", ":")) %>% 
+  mutate(`Specific treatment type` = str_replace(`Specific treatment type`, "\\+", ":")) %>% 
+  mutate(`Specific treatment type` = str_replace_all(`Specific treatment type`, ":Unknown", "")) %>% 
+  mutate(`Specific treatment type` = str_replace_all(`Specific treatment type`, " ", "")) %>% 
+  mutate(`Specific treatment type` = ifelse(is.na(`Specific treatment type`), "Unknown", `Specific treatment type`)) %>% 
+  separate(`Specific treatment type`, into=c("main_treatment"), sep=":", remove=F) 
+
+subset3_tidy %>% pull(main_treatment) %>% unique()
+```
+
+```{r}
+# two main types of IVF
+pal <- c(wes_palette("Royal1"), wes_palette("Moonrise3"), wes_palette("Darjeeling2"))
+ggplot(subset3,aes(x = years, fill = `Type of treatment - IVF or DI`)) + 
+  geom_bar()+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  scale_fill_manual(values=pal)
+
+# all IVF treatments by year
+subset3_tidy %>% 
+  filter(`Type of treatment - IVF or DI` == 'IVF') %>% 
+ggplot(aes(x = years, fill = main_treatment)) + 
+  geom_bar()+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  scale_fill_manual(values=pal)
+
+
+# now look only at rare treatments
+subset3_tidy_sub<-subset3_tidy %>% 
+  group_by(main_treatment) %>%
+  filter(n()<5000) %>% 
+  filter(n()>20)
+
+ggplot(subset3_tidy_sub, aes(x = years, fill = main_treatment)) + 
+  geom_bar()+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  scale_fill_manual(values=pal)
+```
+
+
+```{r}
+# looking at DI treatments
+subset3_DI<-subset3_tidy %>% 
+  filter(`Type of treatment - IVF or DI` == "DI") %>%
+  select(main_treatment, years) %>%
+  group_by(main_treatment, years) %>%
+  mutate(count = n())%>%
+  distinct() %>% 
+  arrange(years)
+
+pal <- c(wes_palette("Darjeeling2"))
+ggplot(subset3_DI,aes(x = years, y= count,fill = main_treatment)) + 
+  geom_col()+
+  theme_minimal_hgrid(10, rel_small = 1)+
+  scale_fill_manual(values=pal)
+
+```
+
+
+
+```{r, pa,  fig.height = 5, fig.width = 10 }
+# finally, looking at treatment by specific years
+
+dat<-subset3_tidy %>% 
+  group_by(main_treatment) %>%
+  #filter(n()<5000) %>% 
+  #filter(n()>20) %>% 
+  ungroup %>% 
+  select(main_treatment, `Year of Treatment` )  %>% 
+  group_by(main_treatment, `Year of Treatment`) %>% 
+  mutate(count = n())%>%
+  distinct() 
+
+pal<-c(unname(piratepal("basel")), unname(piratepal("bugs")))
+pa<- ggplot(data = dat, aes(x = `Year of Treatment`  , y = count, group = main_treatment)) +
+  geom_line(aes(color = main_treatment, alpha = 1), size = 1) +
+  geom_point(aes(color = main_treatment, alpha = 1), size = 3) +
+  scale_x_continuous(breaks = sort(unique(dat$`Year of Treatment`))[c(TRUE, FALSE)]  )+
+  theme(legend.position = "right") +
+  scale_colour_manual(values=pal)+
+  theme_minimal_hgrid(10, rel_small = 1) +
+  labs(x = "year",  colour="Main treatment",
+       y = "treatment",
+       title = "Choice of treatments over the years (all)") +
+  guides(alpha = FALSE) 
+pa
+```
+
+```{r pb,  fig.height = 5, fig.width = 7 }
+
+dat2<-subset3_tidy %>% 
+  group_by(main_treatment) %>%
+  filter(n()<5000) %>% 
+  #filter(n()>20) %>% 
+  ungroup %>% 
+  select(main_treatment, `Year of Treatment` )  %>% 
+  group_by(main_treatment, `Year of Treatment`) %>% 
+  mutate(count = n())%>%
+  distinct() 
+
+pb <-ggplot(data = dat2, aes(x = `Year of Treatment`  , y = count, group = main_treatment)) +
+  geom_line(aes(color = main_treatment, alpha = 1), size = 1) +
+  geom_point(aes(color = main_treatment, alpha = 1), size = 3) +
+  scale_x_continuous(breaks = sort(unique(dat$`Year of Treatment`))[c(TRUE, FALSE)]  )+
+  theme(legend.position = "right") +
+  scale_colour_manual(values=c(pal))+
+  theme_minimal_hgrid(10, rel_small = 1) +
+  labs(x = "year",  colour="Main treatment",
+       y = "treatment",
+       title = "Choice of treatments over the years (rare)")+
+    guides(alpha = FALSE) 
+pb
+```
+
+
+
