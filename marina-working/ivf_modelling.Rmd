@@ -19,8 +19,6 @@ library(forcats)
 
 
 ```{r}
-#rdsf
-data_path<-"/projects/MRC-IEU/research/projects/ieu2/p4/052/working/data/hfea-ivf/data/"
 # local 
 data_path<-"~/Documents/Projects/IVF/data/"
 ```
@@ -50,8 +48,9 @@ dat1<-full_data %>%
 ```
 
 ```{r}
+# this shows that all DI treatments were performed in "Reason unassigned" enrolment type,
+# so it's a perfect predicted, and therefore has to be excluded
 full_data %>% filter(main_reason == "Reason unassigned") %>% count(`Type of treatment - IVF or DI` )
-
 full_data %>% filter(main_reason != "Reason unassigned") %>% count(`Type of treatment - IVF or DI` )
 ```
 
@@ -68,8 +67,6 @@ dat<-dat1 %>%
   mutate(ovulation_induction = fct_lump_min(ovulation_induction %>% as.factor, min=50)) %>% 
   mutate_if(is.factor, as.character)
   
-
-
 dim(dat[is.na(dat$ovulation_induction),])
 dat[is.na(dat$ovulation_induction),]$ovulation_induction <- "No record"
 dat %>% count(ovulation_induction) %>% View()
@@ -97,12 +94,11 @@ dim(dat)
 
 
 ```{r}
-
 dat_sub<-dat %>% 
     select(
         patient_age=`Patient Age at Treatment`,
         #duration_infertility=`Date patient started trying to become pregnant OR date of last pregnancy`, # 96% missing
-        #main_reason, # linaerly correlated with outcome
+        ##main_reason, # linaerly correlated with outcome
         cycles_IVF=`Total Number of Previous IVF cycles`,                                    
         cycles_DI=`Total Number of Previous DI cycles`,                                     
         pregnancy_IVF=`Total number of IVF pregnancies`,                                      
@@ -128,7 +124,7 @@ dat_sub<-dat %>%
         cause_sperm_immuno = `Cause of Infertility -  Partner Sperm Immunological factors`,
         #egg_source=`Egg Source`,
         #sperm_source=`Sperm From`,
-        #ovulation_induction,
+        ovulation_induction,
         main_treatment=`Type of treatment - IVF or DI`) %>% 
  # mutate(egg_source=ifelse(is.na(egg_source), "unknown",egg_source)) %>% 
   mutate(cycles_IVF = ifelse(cycles_IVF == ">=5", 10 ,cycles_IVF)) %>%  # arbitrarily going to give this a large value
@@ -137,17 +133,18 @@ dat_sub<-dat %>%
 dat_sub<-dat_sub %>% 
           mutate_if(is.character, as.factor) %>% 
           mutate_if(is.numeric, as.factor) %>% 
-          mutate_at(vars(cycles_IVF,
-                      cycles_DI,
-                      pregnancy_IVF,
-                      pregnancy_DI,
-                      birth_IVF,
-                      birth_DI), as.numeric) %>% 
+          mutate_at(vars(
+                     cycles_IVF,
+                     cycles_DI,
+                     pregnancy_IVF,
+                     pregnancy_DI,
+                     birth_IVF,
+                     birth_DI), as.numeric) %>% 
           filter_all(all_vars(!is.na(.)))
 ```
 
 
- Predict treatment IVF vs DI
+## Predict treatment IVF vs DI
 ```{r}
 # split into train/test
 data_split <- initial_split(dat_sub, prop = 0.6)
@@ -167,7 +164,7 @@ my_training <- juice(my_recipe)
 
 ```{r}
 # model 1
-rf <-  rand_forest(trees = 100, mode = "classification") %>%
+rf <-  rand_forest(trees = 20, mode = "classification") %>%
   set_engine("randomForest") %>%
   fit(main_treatment ~ ., data = my_training)
 
@@ -177,25 +174,60 @@ out1<-rf %>%
 
 out1 %>% 
 metrics(truth=main_treatment, estimate=.pred_class)
+
+
+out1_prob <- rf %>%
+  predict(my_testing, type = "prob") %>%
+  bind_cols(my_testing)
+
+out1_prob %>%
+    mutate_at(vars(.pred_IVF), function(x) as.integer(as.character(x))) %>%
+    roc_auc(., main_treatment, .pred_IVF)
+
+out1_prob %>% 
+  roc_curve(truth=main_treatment, .pred_IVF) %>%
+  autoplot()
+
+
+vip::vip(rf)
 ```
 
-# based on age + infertility
-.metric  .estimator .estimate
-  <chr>    <chr>          <dbl>
-1 accuracy binary         0.919
-2 kap      binary         0.276
 
+```{}
+#Based on age+ infertility + numbers + ovulation induction
+  .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.980
+2 kap      binary         0.881
+  roc_auc	 binary	    0.9484991	
+  
+  
 #Based on infertility + numbers
   .metric  .estimator .estimate
   <chr>    <chr>          <dbl>
 1 accuracy binary         0.962
 2 kap      binary         0.762
 
-#Based on infertility + numbers + ovulation induction
+
+# based on infertility + numbers (except cycles)
+
   .metric  .estimator .estimate
   <chr>    <chr>          <dbl>
-1 accuracy binary         0.980
-2 kap      binary         0.881
+1 accuracy binary         0.924
+2 kap      binary         0.430
+  roc_auc	 binary	        0.33
+
+
+# based on age + infertility
+.metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy binary         0.919
+2 kap      binary         0.276
+  roc_auc	 binary	        0.40
+
+```
+Kappa or Cohen’s Kappa is like classification accuracy, except that it is normalized at the baseline of random chance on your dataset. It is a more useful measure to use on problems that have an imbalance in the classes (e.g. 70-30 split for classes 0 and 1 and you can achieve 70% accuracy by predicting all instances are for class 0). 
+
 
 ```{r}
 # model 2
@@ -211,6 +243,7 @@ out2 %>%
 metrics(truth=main_treatment, estimate=.pred_class)
 ```
 
+```{}
 # based on age + infertility
   .metric  .estimator .estimate
   <chr>    <chr>          <dbl>
@@ -223,6 +256,8 @@ metrics(truth=main_treatment, estimate=.pred_class)
   <chr>    <chr>          <dbl>
 1 accuracy binary         0.943
 2 kap      binary         0.608
+```
+
 
 ```{r}
 # model 3
@@ -238,30 +273,31 @@ out3 %>%
 metrics(truth=main_treatment, estimate=.pred_class)
 ```
 
-#Based on infertility + numbers
+
+```{r}
+# Based on infertility + numbers
 
  .metric  .estimator .estimate
   <chr>    <chr>          <dbl>
 1 accuracy binary         0.962
 2 kap      binary         0.761
+```
 
 
 
 
-
-Sub-categories of treatments
-
+## Sub-categories of treatments
 ```{r}
 
 dat_sub<-dat %>% 
     select(
         patient_age=`Patient Age at Treatment`,
-        cycles_IVF=`Total Number of Previous IVF cycles`,                                    
-        cycles_DI=`Total Number of Previous DI cycles`,                                     
-        pregnancy_IVF=`Total number of IVF pregnancies`,                                      
-        pregnancy_DI=`Total number of DI pregnancies`,                                        
-        birth_IVF=`Total number of live births - conceived through IVF`,                   
-        birth_DI= `Total number of live births - conceived through DI`,
+        #cycles_IVF=`Total Number of Previous IVF cycles`,                                    
+        #cycles_DI=`Total Number of Previous DI cycles`,                                     
+        #pregnancy_IVF=`Total number of IVF pregnancies`,                                      
+        #pregnancy_DI=`Total number of DI pregnancies`,                                        
+        #birth_IVF=`Total number of live births - conceived through IVF`,                   
+        #birth_DI= `Total number of live births - conceived through DI`,
         infertility_FP =`Type of Infertility - Female Primary`,
         infertility_FS =`Type of Infertility - Female Secondary`,
         infertility_MP =`Type of Infertility - Male Primary`,
@@ -279,6 +315,7 @@ dat_sub<-dat %>%
         cause_sperm_morph = `Cause of Infertility -  Partner Sperm Morphology` ,          
         cause_sperm_motility = `Causes of Infertility - Partner Sperm Motility` ,            
         cause_sperm_immuno = `Cause of Infertility -  Partner Sperm Immunological factors`,
+        #ovulation_induction,
         specific_treatment) %>%
   mutate(specific_treatment=droplevels(specific_treatment)) %>% 
  # mutate(egg_source=ifelse(is.na(egg_source), "unknown",egg_source)) %>% 
@@ -288,12 +325,13 @@ dat_sub<-dat %>%
 dat_sub<-dat_sub %>% 
           mutate_if(is.character, as.factor) %>% 
           mutate_if(is.numeric, as.factor) %>% 
-          mutate_at(vars(cycles_IVF,
-                      cycles_DI,
-                      pregnancy_IVF,
-                      pregnancy_DI,
-                      birth_IVF,
-                      birth_DI), as.numeric) %>% 
+          #mutate_at(vars(
+          #            cycles_IVF,
+          #            cycles_DI,
+          #            pregnancy_IVF,
+          #            pregnancy_DI,
+          #            birth_IVF,
+          #            birth_DI), as.numeric) %>% 
           filter_all(all_vars(!is.na(.)))
 ```
 
@@ -316,7 +354,7 @@ my_training <- juice(my_recipe)
 
 ```{r}
 # model 1
-rf_multi <-  rand_forest(trees = 100, mode = "classification") %>%
+rf_multi <-  rand_forest(trees = 50, mode = "classification") %>%
   set_engine("randomForest") %>%
   fit(specific_treatment ~ ., data = my_training)
 
@@ -327,18 +365,74 @@ out1_multi<-rf_multi %>%
 out1_multi %>% 
 metrics(truth=specific_treatment, estimate=.pred_class)
 
+
 out1_multi %>% select(specific_treatment, .pred_class) %>% View()
 
 
-class_voting<-predict(rf_multi, my_testing, type = "prob") %>%
+predict(rf_multi, my_testing, type = "prob") %>%
   bind_cols(predict(rf_multi, my_testing)) %>%
   bind_cols(select(my_testing, specific_treatment)) %>%View()
+
   metrics(specific_treatment, .pred_ICI:.pred_IVF, estimate = .pred_class)
 View(class_voting)
+
+
+
+out1_multi_prob <- rf_multi %>%
+  predict(my_testing, type = "prob") %>%
+  bind_cols(my_testing)
+
+out1_multi_prob %>%
+    mutate_at(vars(.pred_IVF), function(x) as.integer(as.character(x))) %>%
+    roc_auc(., specific_treatment, .pred_ICI:.pred_IVF)
+
+
+out1_multi_prob %>% 
+  roc_curve(truth=specific_treatment, .pred_ICI:.pred_IVF) %>%
+  autoplot()
+
+
+vip::vip(rf_multi)
 ```
  
+```{}
  #Based on infertility + numbers
   .metric  .estimator .estimate
   <chr>    <chr>          <dbl>
 1 accuracy multiclass     0.726
 2 kap      multiclass     0.530
+
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 roc_auc hand_till      0.730
+
+ #Based on infertility + numbers + induction
+ .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy multiclass     0.744
+2 kap      multiclass     0.566
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 roc_auc hand_till      0.755
+
+# base only on age+ infertility
+  .metric  .estimator .estimate
+  <chr>    <chr>          <dbl>
+1 accuracy multiclass     0.678
+2 kap      multiclass     0.423
+roc_auc	hand_till	0.6047284	
+```
+
+```{r}
+# model 2
+knn_multi <-  nearest_neighbor(mode = "classification") %>%
+  set_engine("kknn") %>%
+  fit(specific_treatment ~ ., data = my_training)
+
+out1_multi<-rf_multi %>%
+  predict(my_testing) %>%
+  bind_cols(my_testing)
+
+out1_multi %>% 
+metrics(truth=specific_treatment, estimate=.pred_class)
+```
