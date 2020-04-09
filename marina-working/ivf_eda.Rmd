@@ -29,7 +29,7 @@ library(yarrr)
 #rdsf
 data_path<-"/projects/MRC-IEU/research/projects/ieu2/p4/052/working/data/hfea-ivf/data/"
 # local 
-data_path<-"~/Downloads/"
+data_path<-"~/Documents/Projects/IVF/data/"
 ```
 
 #### Load data 
@@ -112,6 +112,40 @@ ggplot(reasons, aes(fill = main_reason, values = percent))+
   ) 
 ```
 
+Showing age groups in a similar way
+```{r}
+# check partipation reasons
+full_data %>% 
+  count(`Patient Age at Treatment`)
+
+# tidy up reason, keeping just the first one
+age<-full_data %>% 
+  mutate(patient_age = gsub(" ", "", `Patient Age at Treatment`) ) %>% 
+  count(patient_age) %>% 
+  group_by(patient_age) %>% 
+  summarize(sum=sum(n)) %>% 
+  mutate(sum=sum/10000)
+
+
+# simple bar chart
+ggplot(age,aes(x = patient_age, y = sum)) + 
+  geom_col()+
+  coord_flip()+
+  theme_minimal_hgrid(10, rel_small = 1)
+
+pal_b<-c(wes_palette("GrandBudapest2"), wes_palette("GrandBudapest1"))
+#show_col(pal9)
+ggplot(age, aes(fill = reorder(patient_age, sum), values = sum))+
+  geom_waffle(n_rows = 15, size = 0.33, colour = "white", flip = TRUE) +
+  coord_equal() +
+  theme_minimal_grid(10, rel_small = 1,line_size=0)+
+  theme_enhance_waffle()+
+  guides(fill = guide_legend(reverse = TRUE))+
+  ggtitle("   Age group")+
+  scale_fill_manual(
+    name = NULL,
+    values = pal_b)
+```
 
 
 ```{r}
@@ -371,6 +405,62 @@ p<-(p1 + p2)
 p
 ```
 
+```{r px, fig.height = 4, fig.width = 12}
+# repeat in percentages
+
+subset2<-  subset2 %>%
+  group_by(`Patient Age at Treatment`, cause_of_infertility) %>%         
+  mutate(count = n()) %>%
+  distinct() %>% 
+  ungroup() 
+# calulate sums per age
+age_counts<-
+  subset2 %>%
+  select(`Patient Age at Treatment`, count) %>% 
+  group_by(`Patient Age at Treatment`) %>% 
+  summarize(total = sum(count)) %>%
+  ungroup() %>% 
+  column_to_rownames("Patient Age at Treatment") %>% 
+  t() %>% as.data.frame()
+print(age_counts)  
+
+subset2<-subset2 %>% 
+    mutate(age_group_percent= ifelse(`Patient Age at Treatment` == "18-34", count/age_counts$`18-34`,
+                              ifelse(`Patient Age at Treatment` == "35-37", count/age_counts$`35-37`,
+                              ifelse(`Patient Age at Treatment` == "38-39", count/age_counts$`38-39`,
+                              ifelse(`Patient Age at Treatment` == "40-42", count/age_counts$`40-42`,
+                              ifelse(`Patient Age at Treatment` == "43-44", count/age_counts$`43-44`,
+                              ifelse(`Patient Age at Treatment` == "45-50", count/age_counts$`45-50`, NA)))))))
+
+
+
+pal <- c(wes_palette("Royal1"), wes_palette("Moonrise3"), wes_palette("Chevalier1"))
+p1<-subset2 %>% 
+  filter(partner == "Female/Patient") %>% 
+  ggplot(aes(x = `Patient Age at Treatment`,y=age_group_percent, fill = cause_of_infertility)) + 
+    geom_col()+
+    theme_minimal_hgrid(10, rel_small = 1)+
+    scale_fill_manual(values=pal)+
+    facet_wrap(~partner, nrow=1)+
+    theme(legend.position = "right")+
+    labs(fill = "Cause of Infertility", y="")+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2<-subset2 %>% 
+  filter(partner == "Male/Partner") %>% 
+  ggplot(aes(x = `Patient Age at Treatment`, y=age_group_percent,fill = cause_of_infertility)) + 
+    geom_col()+
+    theme_minimal_hgrid(10, rel_small = 1)+
+    scale_fill_manual(values=rev(pal))+
+    facet_wrap(~partner, nrow=1)+
+    theme(legend.position = "right")+
+    labs(fill = "Cause of Infertility", y="")+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+px<-(p1 + p2)
+px
+
+```
 
 
 ### Exploring types of treatments
@@ -429,6 +519,8 @@ subset3_tidy <-  subset3 %>%
   separate(`Specific treatment type`, into=c("main_treatment"), sep=":", remove=F) 
 
 subset3_tidy %>% pull(main_treatment) %>% unique()
+
+subset3_tidy %>% count(main_treatment) %>% mutate(perc=round((n/1376454), 3)) %>% arrange(-perc)
 ```
 
 ```{r}
@@ -439,9 +531,8 @@ ggplot(subset3,aes(x = years, fill = `Type of treatment - IVF or DI`)) +
   theme_minimal_hgrid(10, rel_small = 1)+
   scale_fill_manual(values=pal)
 
-# all IVF treatments by year
+# all Itreatments by year
 subset3_tidy %>% 
-  filter(`Type of treatment - IVF or DI` == 'IVF') %>% 
 ggplot(aes(x = years, fill = main_treatment)) + 
   geom_bar()+
   theme_minimal_hgrid(10, rel_small = 1)+
@@ -499,17 +590,18 @@ pa<- ggplot(data = dat, aes(x = `Year of Treatment`  , y = count, group = main_t
   geom_line(aes(color = main_treatment, alpha = 1), size = 1) +
   geom_point(aes(color = main_treatment, alpha = 1), size = 3) +
   scale_x_continuous(breaks = sort(unique(dat$`Year of Treatment`))[c(TRUE, FALSE)]  )+
+  scale_y_log10()+
   theme(legend.position = "right") +
   scale_colour_manual(values=pal)+
   theme_minimal_hgrid(10, rel_small = 1) +
   labs(x = "year",  colour="Main treatment",
-       y = "treatment",
+       y = "log(counts)",
        title = "Choice of treatments over the years (all)") +
   guides(alpha = FALSE) 
 pa
 ```
 
-```{r pb,  fig.height = 5, fig.width = 7 }
+```{r pb,  fig.height = 5, fig.width = 10 }
 
 dat2<-subset3_tidy %>% 
   group_by(main_treatment) %>%
@@ -526,14 +618,41 @@ pb <-ggplot(data = dat2, aes(x = `Year of Treatment`  , y = count, group = main_
   geom_point(aes(color = main_treatment, alpha = 1), size = 3) +
   scale_x_continuous(breaks = sort(unique(dat$`Year of Treatment`))[c(TRUE, FALSE)]  )+
   theme(legend.position = "right") +
+  scale_y_log10()+
   scale_colour_manual(values=c(pal))+
   theme_minimal_hgrid(10, rel_small = 1) +
   labs(x = "year",  colour="Main treatment",
-       y = "treatment",
+       y = "log(counts)",
        title = "Choice of treatments over the years (rare)")+
     guides(alpha = FALSE) 
 pb
 ```
 
 
+```{r pc,  fig.height = 5, fig.width = 10 }
+
+dat3<-subset3_tidy %>% 
+  group_by(main_treatment) %>%
+  filter(n()>5000) %>% 
+  #filter(n()>20) %>% 
+  ungroup %>% 
+  select(main_treatment, `Year of Treatment` )  %>% 
+  group_by(main_treatment, `Year of Treatment`) %>% 
+  mutate(count = n())%>%
+  distinct() 
+
+pc <-ggplot(data = dat3, aes(x = `Year of Treatment`  , y = count, group = main_treatment)) +
+  geom_line(aes(color = main_treatment, alpha = 1), size = 1) +
+  geom_point(aes(color = main_treatment, alpha = 1), size = 3) +
+  scale_x_continuous(breaks = sort(unique(dat$`Year of Treatment`))[c(TRUE, FALSE)]  )+
+  theme(legend.position = "right") +
+  scale_y_log10()+
+  scale_colour_manual(values=c(pal))+
+  theme_minimal_hgrid(10, rel_small = 1) +
+  labs(x = "year",  colour="Main treatment",
+       y = "log(counts)",
+       title = "Choice of treatments over the years (common)")+
+    guides(alpha = FALSE) 
+pc
+```
 
